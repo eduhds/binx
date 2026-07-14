@@ -1,0 +1,8 @@
+[package]
+name = "binx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nix = { version = "0.31.3", features = ["process"] }
+serde_json = "1.0"
