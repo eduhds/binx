@@ -2,12 +2,27 @@ use nix::unistd::execve;
 use std::ffi::CString;
 use std::os::unix::fs::PermissionsExt;
 use serde_json::Value;
+use clap::Parser;
 
 const VERSION: &str = "0.1.0";
 const CONFIG_FILE: &str = ".config/binx.json";
 const DEFAULT_CONFIG: &str = r#"{
   "aliases": {}
 }"#;
+
+#[derive(Parser)]
+#[command(name = "binx")]
+#[command(about = "Execute binaries with alias management", long_about = None)]
+#[command(version = VERSION)]
+#[command(disable_version_flag = true)]
+struct Cli {
+    /// Target file or alias to execute
+    target: String,
+
+    /// Print version information
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: (),
+}
 
 fn get_config_file_path() -> Result<String, std::io::Error> {
     let home_dir = std::env::var("HOME").map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
@@ -64,15 +79,11 @@ fn binx_exec(bin_path: &str, bin_args: &[String]) {
 
 #[allow(unreachable_code)]
 fn main() {
+    let cli = Cli::parse();
+
+    let target = cli.target;
     let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 {
-        println!("Usage: binx <file> [args...]");
-        return;
-    }
-
-    let target = &args[1];
-    let mut name = "";
+    let mut name = String::new();
 
     println!("binx v{}", VERSION);
 
@@ -91,7 +102,7 @@ fn main() {
 
     // First, determine if target is an alias or a path
     let is_alias = if let Some(aliases) = aliases {
-        aliases.get(target).is_some()
+        aliases.get(&target).is_some()
     } else {
         false
     };
@@ -99,8 +110,8 @@ fn main() {
     if is_alias {
         // Target is an alias
         if let Some(aliases) = aliases {
-            if let Some(alias) = aliases.get(target) {
-                name = target;
+            if let Some(alias) = aliases.get(&target) {
+                name = target.clone();
                 
                 if let Some(alias_path) = alias.get("path").and_then(|p| p.as_str()) {
                     exists = true;
@@ -110,7 +121,7 @@ fn main() {
         }
     } else {
         // Target may be a path, resolve it
-        let absolute_path_buf = match std::fs::canonicalize(target) {
+        let absolute_path_buf = match std::fs::canonicalize(&target) {
             Ok(p) => p,
             Err(_) => {
                 eprintln!("Error: '{}' is not a valid path or alias", target);
@@ -124,11 +135,12 @@ fn main() {
         name = absolute_path_str
             .rsplit('/')
             .next()
-            .unwrap_or(&absolute_path_str);
+            .unwrap_or(&absolute_path_str)
+            .to_string();
 
         // Check if the basename exists as an alias
         if let Some(aliases) = aliases {
-            if let Some(alias) = aliases.get(name) {
+            if let Some(alias) = aliases.get(&name) {
                 if let Some(alias_path) = alias.get("path").and_then(|p| p.as_str()) {
                     if alias_path == absolute_path_str.as_str() {
                         exists = true;
@@ -149,9 +161,9 @@ fn main() {
         let input = input.trim();
 
         let alias_name = if input.is_empty() {
-            name
+            name.clone()
         } else {
-            input
+            input.to_string()
         };
 
         if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
