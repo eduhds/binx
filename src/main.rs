@@ -3,12 +3,18 @@ use std::ffi::CString;
 use std::os::unix::fs::PermissionsExt;
 use serde_json::Value;
 use clap::Parser;
+use std::path::PathBuf;
 
 const VERSION: &str = "0.1.0";
 const CONFIG_FILE: &str = ".config/binx.json";
 const DEFAULT_CONFIG: &str = r#"{
   "aliases": {}
 }"#;
+
+/// Installation directory path
+const INSTALL_DIR: &str = ".binx";
+/// Installation executable name
+const INSTALL_EXECUTABLE: &str = "binx";
 
 #[derive(Parser)]
 #[command(name = "binx")]
@@ -24,9 +30,154 @@ struct Cli {
     version: (),
 }
 
+/// Gets the home directory from environment variables
+fn get_home_dir() -> Result<String, std::io::Error> {
+    std::env::var("HOME").map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))
+}
+
+/// Gets the configuration file path
 fn get_config_file_path() -> Result<String, std::io::Error> {
-    let home_dir = std::env::var("HOME").map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
+    let home_dir = get_home_dir()?;
     Ok(format!("{}/{}", home_dir, CONFIG_FILE))
+}
+
+/// Gets the installation directory path (~/.binx)
+fn get_install_dir() -> Result<PathBuf, std::io::Error> {
+    let home_dir = get_home_dir()?;
+    Ok(PathBuf::from(home_dir).join(INSTALL_DIR))
+}
+
+/// Gets the installation executable path (~/.binx/binx)
+fn get_install_executable_path() -> Result<PathBuf, std::io::Error> {
+    let install_dir = get_install_dir()?;
+    Ok(install_dir.join(INSTALL_EXECUTABLE))
+}
+
+/// Gets the current executable path
+fn get_current_executable_path() -> Result<PathBuf, std::io::Error> {
+    std::env::current_exe().map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))
+}
+
+/// Checks if the current executable is running from the installation path
+fn is_running_from_installation() -> bool {
+    match (get_current_executable_path(), get_install_executable_path()) {
+        (Ok(current), Ok(install)) => current == install,
+        _ => false,
+    }
+}
+
+/// Checks if the installation exists and is valid
+fn installation_exists() -> bool {
+    match get_install_executable_path() {
+        Ok(path) => path.exists() && path.is_file(),
+        Err(_) => false,
+    }
+}
+
+/// Performs the installation by moving the executable to ~/.binx/binx
+fn perform_installation() -> Result<(), std::io::Error> {
+    let install_dir = get_install_dir()?;
+    let install_path = get_install_executable_path()?;
+    let current_path = get_current_executable_path()?;
+
+    // Create installation directory if it doesn't exist
+    if !install_dir.exists() {
+        std::fs::create_dir_all(&install_dir)?;
+        println!("Created installation directory: {:?}", install_dir);
+    }
+
+    // Copy the current executable to the installation path
+    std::fs::copy(&current_path, &install_path)?;
+    
+    // Set executable permissions
+    let mut perms = std::fs::metadata(&install_path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&install_path, perms)?;
+    
+    println!("Installed executable to: {:?}", install_path);
+    
+    Ok(())
+}
+
+/// Detects the current shell and returns the appropriate rc file path
+fn detect_shell_rc() -> Option<PathBuf> {
+    let home_dir = get_home_dir().ok()?;
+    let shell = std::env::var("SHELL").ok()?;
+    
+    let rc_file = if shell.contains("zsh") {
+        ".zshrc"
+    } else if shell.contains("bash") {
+        ".bashrc"
+    } else if shell.contains("fish") {
+        ".config/fish/config.fish"
+    } else {
+        // Default to .bashrc for unknown shells
+        ".bashrc"
+    };
+    
+    Some(PathBuf::from(home_dir).join(rc_file))
+}
+
+/// Adds the installation directory to PATH in the shell's rc file
+fn add_to_path() -> Result<(), std::io::Error> {
+    let install_dir = get_install_dir()?;
+    let install_dir_str = install_dir.to_string_lossy().to_string();
+    let rc_path = detect_shell_rc().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "Could not detect shell rc file")
+    })?;
+    
+    // Check if PATH already contains the installation directory
+    if let Ok(path) = std::env::var("PATH") {
+        if path.split(':').any(|p| p == install_dir_str) {
+            println!("Installation directory already in PATH");
+            return Ok(());
+        }
+    }
+    
+    // Read the rc file content
+    let content = std::fs::read_to_string(&rc_path).unwrap_or_default();
+    
+    // Check if the PATH modification already exists in the rc file
+    let path_line = format!("export PATH=\"$PATH:{}\"", install_dir_str);
+    if content.contains(&install_dir_str) {
+        println!("PATH modification already exists in {:?}", rc_path);
+        return Ok(());
+    }
+    
+    // Append the PATH modification to the rc file
+    let new_content = if content.is_empty() {
+        format!("{}\n", path_line)
+    } else {
+        format!("{}\n{}\n", content, path_line)
+    };
+    
+    std::fs::write(&rc_path, new_content)?;
+    println!("Added {:?} to PATH in {:?}", install_dir, rc_path);
+    println!("Please run: source {:?}", rc_path);
+    
+    Ok(())
+}
+
+/// Runs the auto-installation check and performs installation if needed
+fn run_auto_installation() -> Result<(), std::io::Error> {
+    // If running from installation, proceed normally
+    if is_running_from_installation() {
+        return Ok(());
+    }
+    
+    // If installation exists, respect it and proceed
+    if installation_exists() {
+        println!("Installation exists at {:?}", get_install_executable_path()?);
+        println!("Please use the installed version instead");
+        return Ok(());
+    }
+    
+    // Installation doesn't exist, perform installation
+    println!("Performing auto-installation...");
+    perform_installation()?;
+    add_to_path()?;
+    
+    Ok(())
 }
 
 fn get_config() -> Result<Value, Box<dyn std::error::Error>> {
@@ -79,6 +230,12 @@ fn binx_exec(bin_path: &str, bin_args: &[String]) {
 
 #[allow(unreachable_code)]
 fn main() {
+    // Run auto-installation check first
+    if let Err(e) = run_auto_installation() {
+        eprintln!("Auto-installation failed: {}", e);
+        eprintln!("Continuing anyway...");
+    }
+    
     let cli = Cli::parse();
 
     let target = cli.target;
