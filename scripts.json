@@ -1,0 +1,10 @@
+{
+  "$schema": "https://eduhds.github.io/JsonScripts/schema.json",
+  "version": 1,
+  "variables": {
+    "name": "JsonScripts"
+  },
+  "scripts": {
+    "clean": "rm ~/.config/binx.json 2>/dev/null || true && rm -rf ~/.binx 2>/dev/null || true && echo 'Cleaned'"
+  }
+}

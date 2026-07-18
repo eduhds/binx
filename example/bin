@@ -1,2 +1,8 @@
 #!/bin/bash
+echo "---"
 echo "Hello from binx!"
+echo "Arguments received: $#"
+for i in "$@"; do
+    echo "  - $i"
+done
+echo "---"

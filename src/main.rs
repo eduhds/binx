@@ -1,20 +1,14 @@
-use nix::unistd::execve;
-use std::ffi::CString;
-use std::os::unix::fs::PermissionsExt;
-use serde_json::Value;
 use clap::Parser;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-const VERSION: &str = "0.1.0";
-const CONFIG_FILE: &str = ".config/binx.json";
-const DEFAULT_CONFIG: &str = r#"{
-  "aliases": {}
-}"#;
+mod internal;
+mod utils;
 
-/// Installation directory path
-const INSTALL_DIR: &str = ".binx";
-/// Installation executable name
-const INSTALL_EXECUTABLE: &str = "binx";
+pub use crate::internal::config;
+pub use crate::internal::flow;
+
+const VERSION: &str = "0.1.0";
 
 #[derive(Parser)]
 #[command(name = "binx")]
@@ -25,307 +19,53 @@ struct Cli {
     /// Target file or alias to execute
     target: String,
 
+    /// Remove an alias, its script and .desktop file
+    #[arg(long = "remove")]
+    remove: bool,
+
     /// Install a script for the target in ~/.binx/
     #[arg(long = "install")]
     install: bool,
 
+    /// Install a .desktop file for the target
+    #[arg(long = "desktop")]
+    desktop: bool,
+
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
     version: (),
-}
 
-/// Gets the home directory from environment variables
-fn get_home_dir() -> Result<String, std::io::Error> {
-    std::env::var("HOME").map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))
-}
-
-/// Gets the configuration file path
-fn get_config_file_path() -> Result<String, std::io::Error> {
-    let home_dir = get_home_dir()?;
-    Ok(format!("{}/{}", home_dir, CONFIG_FILE))
-}
-
-/// Gets the installation directory path (~/.binx)
-fn get_install_dir() -> Result<PathBuf, std::io::Error> {
-    let home_dir = get_home_dir()?;
-    Ok(PathBuf::from(home_dir).join(INSTALL_DIR))
-}
-
-/// Gets the installation executable path (~/.binx/binx)
-fn get_install_executable_path() -> Result<PathBuf, std::io::Error> {
-    let install_dir = get_install_dir()?;
-    Ok(install_dir.join(INSTALL_EXECUTABLE))
-}
-
-/// Gets the current executable path
-fn get_current_executable_path() -> Result<PathBuf, std::io::Error> {
-    std::env::current_exe().map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))
-}
-
-/// Checks if the current executable is running from the installation path
-fn is_running_from_installation() -> bool {
-    match (get_current_executable_path(), get_install_executable_path()) {
-        (Ok(current), Ok(install)) => current == install,
-        _ => false,
-    }
-}
-
-/// Checks if the installation exists and is valid
-fn installation_exists() -> bool {
-    match get_install_executable_path() {
-        Ok(path) => path.exists() && path.is_file(),
-        Err(_) => false,
-    }
-}
-
-/// Performs the installation by moving the executable to ~/.binx/binx
-fn perform_installation() -> Result<(), std::io::Error> {
-    let install_dir = get_install_dir()?;
-    let install_path = get_install_executable_path()?;
-    let current_path = get_current_executable_path()?;
-
-    // Create installation directory if it doesn't exist
-    if !install_dir.exists() {
-        std::fs::create_dir_all(&install_dir)?;
-        println!("Created installation directory: {:?}", install_dir);
-    }
-
-    // Copy the current executable to the installation path
-    std::fs::copy(&current_path, &install_path)?;
-    
-    // Set executable permissions
-    let mut perms = std::fs::metadata(&install_path)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&install_path, perms)?;
-    
-    println!("Installed executable to: {:?}", install_path);
-    
-    Ok(())
-}
-
-/// Detects the current shell and returns the appropriate rc file path
-fn detect_shell_rc() -> Option<PathBuf> {
-    let home_dir = get_home_dir().ok()?;
-    let shell = std::env::var("SHELL").ok()?;
-    
-    let rc_file = if shell.contains("zsh") {
-        ".zshrc"
-    } else if shell.contains("bash") {
-        ".bashrc"
-    } else if shell.contains("fish") {
-        ".config/fish/config.fish"
-    } else {
-        // Default to .bashrc for unknown shells
-        ".bashrc"
-    };
-    
-    Some(PathBuf::from(home_dir).join(rc_file))
-}
-
-/// Adds the installation directory to PATH in the shell's rc file
-fn add_to_path() -> Result<(), std::io::Error> {
-    let install_dir = get_install_dir()?;
-    let install_dir_str = install_dir.to_string_lossy().to_string();
-    let rc_path = detect_shell_rc().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Could not detect shell rc file")
-    })?;
-    
-    // Check if PATH already contains the installation directory
-    if let Ok(path) = std::env::var("PATH") {
-        if path.split(':').any(|p| p == install_dir_str) {
-            println!("Installation directory already in PATH");
-            return Ok(());
-        }
-    }
-    
-    // Read the rc file content
-    let content = std::fs::read_to_string(&rc_path).unwrap_or_default();
-    
-    // Check if the PATH modification already exists in the rc file
-    let path_line = format!("export PATH=\"$PATH:{}\"", install_dir_str);
-    if content.contains(&install_dir_str) {
-        println!("PATH modification already exists in {:?}", rc_path);
-        return Ok(());
-    }
-    
-    // Append the PATH modification to the rc file
-    let new_content = if content.is_empty() {
-        format!("{}\n", path_line)
-    } else {
-        format!("{}\n{}\n", content, path_line)
-    };
-    
-    std::fs::write(&rc_path, new_content)?;
-    println!("Added {:?} to PATH in {:?}", install_dir, rc_path);
-    println!("Please run: source {:?}", rc_path);
-    
-    Ok(())
-}
-
-/// Runs the auto-installation check and performs installation if needed
-fn run_auto_installation() -> Result<(), std::io::Error> {
-    // If running from installation, proceed normally
-    if is_running_from_installation() {
-        return Ok(());
-    }
-    
-    // If installation exists, respect it and proceed
-    if installation_exists() {
-        println!("Installation exists at {:?}", get_install_executable_path()?);
-        println!("Please use the installed version instead");
-        return Ok(());
-    }
-    
-    // Installation doesn't exist, perform installation
-    println!("Performing auto-installation...");
-    perform_installation()?;
-    add_to_path()?;
-    
-    Ok(())
-}
-
-/// Generates the shell script content for executing a target via binx
-fn generate_script_content(target: &str) -> String {
-    format!(
-        "#!/bin/bash\n# Auto-generated by binx\nexec binx {} \"$@\"",
-        target
-    )
-}
-
-/// Installs a script for the target in ~/.binx/ with executable permissions
-/// and adds the script path to the config
-fn install_target_script(target: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let install_dir = get_install_dir()?;
-    let script_path = install_dir.join(target);
-    
-    // Ensure installation directory exists
-    if !install_dir.exists() {
-        std::fs::create_dir_all(&install_dir)?;
-        println!("Created installation directory: {:?}", install_dir);
-    }
-    
-    // Generate script content
-    let script_content = generate_script_content(target);
-    
-    // Write script (overwrite if exists)
-    std::fs::write(&script_path, script_content)?;
-    println!("Created script: {:?}", script_path);
-    
-    // Set executable permissions
-    let mut perms = std::fs::metadata(&script_path)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&script_path, perms)?;
-    println!("Set executable permissions on: {:?}", script_path);
-    
-    // Add script path to config
-    let mut config = get_config()?;
-    let script_path_str = script_path.to_string_lossy().to_string();
-    
-    if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
-        if let Some(alias) = aliases.get_mut(target) {
-            // Update existing alias with script path
-            if let Some(alias_obj) = alias.as_object_mut() {
-                alias_obj.insert("script".to_string(), serde_json::json!(script_path_str));
-            }
-        } else {
-            // Create new alias entry with script path
-            let alias_obj = serde_json::json!({
-                "script": script_path_str
-            });
-            aliases.insert(target.to_string(), alias_obj);
-        }
-    }
-    
-    save_config(&config)?;
-    println!("Updated config with script path");
-    
-    Ok(())
-}
-
-fn get_config() -> Result<Value, Box<dyn std::error::Error>> {
-    let config_path = get_config_file_path()?;
-    
-    let content = match std::fs::read_to_string(&config_path) {
-        Ok(content) => {
-            if content.trim().is_empty() {
-                std::fs::write(&config_path, DEFAULT_CONFIG)?;
-                DEFAULT_CONFIG.to_string()
-            } else {
-                content
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::write(&config_path, DEFAULT_CONFIG)?;
-            DEFAULT_CONFIG.to_string()
-        }
-        Err(e) => return Err(e.into()),
-    };
-
-    let config: Value = serde_json::from_str(&content)?;
-    Ok(config)
-}
-
-fn save_config(config: &Value) -> Result<(), std::io::Error> {
-    let config_path = get_config_file_path()?;
-    let config_str = serde_json::to_string_pretty(config)?;
-    std::fs::write(&config_path, config_str)?;
-    Ok(())
-}
-
-#[allow(unreachable_code)]
-fn binx_exec(bin_path: &str, bin_args: &[String]) {
-    let path = CString::new(bin_path).expect("Failed to create CString");
-    let c_args: Vec<CString> = bin_args.iter()
-        .map(|s| CString::new(s.as_str()).expect("Failed to create CString"))
-        .collect();
-    let c_args_refs: Vec<&CString> = c_args.iter().collect();
-
-    let c_env: Vec<CString> = std::env::vars()
-        .map(|(k, v)| CString::new(format!("{}={}", k, v)).expect("Failed to create CString"))
-        .collect();
-    let c_env_refs: Vec<&CString> = c_env.iter().collect();
-
-    println!("---");
-
-    execve::<&CString, &CString>(&path, &c_args_refs, &c_env_refs).expect("Failed to exec");
+    /// Remaining arguments to pass to the target
+    #[arg(trailing_var_arg = true)]
+    args: Vec<String>,
 }
 
 #[allow(unreachable_code)]
 fn main() {
     // Run auto-installation check first
-    if let Err(e) = run_auto_installation() {
+    if let Err(e) = config::run_auto_installation() {
         eprintln!("Auto-installation failed: {}", e);
         eprintln!("Continuing anyway...");
     }
-    
+
     let cli = Cli::parse();
 
     let target = cli.target;
-    let args: Vec<String> = std::env::args().collect();
-    let mut name = String::new();
-
-    // Handle --install flag
-    if cli.install {
-        if let Err(e) = install_target_script(&target) {
-            eprintln!("Failed to install script for '{}': {}", target, e);
-            return;
-        }
-        println!("Successfully installed script for '{}'", target);
-        println!("You can now run: {} [args]", target);
-        return;
-    }
-
+    let args = cli.args;
+    
     println!("binx v{}", VERSION);
-
-    let mut config = match get_config() {
+    
+    let mut config = match config::get_config() {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Failed to read/create config file: {}", e);
             return;
         }
     };
-
-    let mut absolute_path_str = String::new();
+    
+    let mut target_name = String::new();
+    let mut target_path_str = String::new();
+    let mut target_path_buf = PathBuf::new();
     let mut exists = false;
 
     let aliases = config.get("aliases").and_then(|a| a.as_object());
@@ -341,88 +81,132 @@ fn main() {
         // Target is an alias
         if let Some(aliases) = aliases {
             if let Some(alias) = aliases.get(&target) {
-                name = target.clone();
-                
+                target_name = target.clone();
+
                 if let Some(alias_path) = alias.get("path").and_then(|p| p.as_str()) {
-                    exists = true;
-                    absolute_path_str = alias_path.to_string();
+                    match utils::system::resolve_path(alias_path) {
+                        Ok(resolved) => {
+                            exists = true;
+                            target_path_str = resolved.to_string_lossy().to_string();
+                            target_path_buf = resolved;
+                        }
+                        Err(e) => {
+                            eprintln!("Error: alias '{}' has invalid path: {}", target, e);
+                            return;
+                        }
+                    }
                 }
             }
         }
     } else {
-        // Target may be a path, resolve it
-        let absolute_path_buf = match std::fs::canonicalize(&target) {
+        // Target is a path (absolute, relative, or ~/...), resolve to absolute
+        target_path_buf = match utils::system::resolve_path(&target) {
             Ok(p) => p,
-            Err(_) => {
-                eprintln!("Error: '{}' is not a valid path or alias", target);
+            Err(e) => {
+                eprintln!("Error: {}", e);
                 return;
             }
         };
-        
-        absolute_path_str = absolute_path_buf.to_str().expect("Failed to convert path to string").to_string();
-        
-        // Extract basename from the path string
-        name = absolute_path_str
-            .rsplit('/')
-            .next()
-            .unwrap_or(&absolute_path_str)
+
+        if !target_path_buf.is_file() {
+            eprintln!("Error: '{}' is not a file", target);
+            return;
+        }
+
+        target_path_str = target_path_buf
+            .to_str()
+            .expect("Failed to convert path to string")
             .to_string();
 
-        // Check if the basename exists as an alias
+        // Extract basename from the path string as default name suggestion
+        target_name = target_path_str
+            .rsplit('/')
+            .next()
+            .unwrap_or(&target_path_str)
+            .to_string();
+
+        // Search ALL aliases by path value to detect existing registrations
         if let Some(aliases) = aliases {
-            if let Some(alias) = aliases.get(&name) {
-                if let Some(alias_path) = alias.get("path").and_then(|p| p.as_str()) {
-                    if alias_path == absolute_path_str.as_str() {
+            for (alias_key, alias_val) in aliases.iter() {
+                if let Some(alias_path) = alias_val.get("path").and_then(|p| p.as_str()) {
+                    if alias_path == target_path_str.as_str() {
+                        // Already registered under a (possibly different) alias
+                        target_name = alias_key.clone();
                         exists = true;
+                        break;
                     }
                 }
             }
         }
     }
 
+    // Handle --remove flag
+    if cli.remove {
+        if exists {
+            if let Err(e) = config::remove_alias(&target_name) {
+                eprintln!("Failed to remove alias: {}", e);
+            }
+        } else {
+            println!("'{}' is not a registered alias", target);
+        }
+        return;
+    }
+
     if !exists {
         use std::io::{self, Write};
 
-        print!("Enter alias name [{}]: ", name);
+        print!("Enter alias name [{}]: ", target_name);
         io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).expect("Failed to read input");
-        let input = input.trim();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+        let input = input.trim().replace(' ', "_");
 
-        let alias_name = if input.is_empty() {
-            name.clone()
-        } else {
-            input.to_string()
-        };
+        if !input.is_empty() {
+            target_name = input;
+        }
 
         if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
             let alias_obj = serde_json::json!({
-                "path": absolute_path_str
+                "path": target_path_str
             });
 
-            aliases.insert(alias_name.to_string(), alias_obj);
-            
-            if let Err(e) = save_config(&config) {
+            aliases.insert(target_name.to_string(), alias_obj);
+
+            if let Err(e) = config::save_config(&config) {
                 eprintln!("Failed to save config file: {}", e);
             }
         }
     }
 
-    let exec_path = if absolute_path_str.is_empty() {
-        target.as_str()
-    } else {
-        absolute_path_str.as_str()
-    };
+    // Handle --install flag
+    if cli.install {
+        if let Err(e) = config::install_target_script(&target_name) {
+            eprintln!("Failed to install script for '{}': {}", target_name, e);
+            return;
+        }
+        println!("Successfully installed script for '{}'", target_name);
+        println!("You can next time run: {} [args]", target_name);
+    }
 
-    let is_executable = std::fs::metadata(exec_path)
+    // Handle --desktop flag
+    if cli.desktop {
+        if let Err(e) = config::install_desktop_file(&target_name, &target_path_buf) {
+            eprintln!("Failed to install .desktop file for '{}': {}", target_name, e);
+            return;
+        }
+        println!("Successfully installed .desktop file for '{}'", target_name);
+    }
+
+    let is_executable = std::fs::metadata(&target_path_str)
         .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
         .unwrap_or(false);
 
     if is_executable {
-        binx_exec(exec_path, &args[1..]);
+        flow::execute(target_path_str.as_str(), &args);
     } else {
-        eprintln!("Error: '{}' is not executable", exec_path);
+        eprintln!("Error: '{}' is not executable", target_path_str.as_str());
     }
 }
-
