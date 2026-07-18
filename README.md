@@ -84,3 +84,7 @@ cargo run -- <target> [args...]
 - [clap](https://github.com/clap-rs/clap) - Command line argument parser
 - [nix](https://github.com/nix-rust/nix) - Rust friendly bindings to *nix APIs
 - [serde_json](https://github.com/serde-rs/json) - JSON serialization
+
+## Licença
+
+Este projeto está licenciado sob a [GNU General Public License v3.0](LICENSE.txt).
