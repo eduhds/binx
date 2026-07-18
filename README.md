@@ -1,103 +1,86 @@
 # binx
 
-A simple alias manager for executables that allows you to run commands by short names instead of full paths.
+![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 
-## Features
+Alias manager for executables. Run binaries by short names instead of full paths, with support for script installation and desktop integration.
 
-- **Alias Management**: Create and manage aliases for executables
-- **Automatic Path Resolution**: Resolves absolute paths from relative paths or aliases
-- **Interactive Alias Creation**: Prompts for alias name when creating new aliases (defaults to basename)
-- **Configuration Storage**: Stores aliases in a JSON configuration file (`~/.config/binx.json`)
-- **Executable Verification**: Checks if files are executable before running
-- **Environment Preservation**: Passes all environment variables to executed processes (including DISPLAY for GUI apps)
+## Install
 
-## Installation
-
-```bash
-# Clone the repository
+```sh
 git clone <repository-url>
 cd binx
-
-# Build the project
 cargo build --release
-
-# Install (optional)
-sudo cp target/release/binx /usr/local/bin/
+cp target/release/binx ~/.binx/binx
 ```
 
-## Usage
+Binx auto-installs itself to `~/.binx/binx` on first run and adds to PATH.
 
-### Basic Usage
+## Uso
+
+### Registrar e executar
 
 ```bash
-# Run an executable by full path
-binx /path/to/executable
+# Register an executable (prompts for alias name)
+binx /opt/myapp/bin/myapp
 
-# Run an executable by alias (after creating one)
-binx myalias
+# Run by alias
+binx myapp arg1 arg2
 ```
 
-### Creating Aliases
-
-When you run an executable that doesn't have an alias, binx will prompt you to create one:
+### Instalar wrapper para shell
 
 ```bash
-$ binx /home/user/projects/myapp/target/release/myapp
-binx v0.1.0
-Enter alias name [myapp]: myapp
----
-# myapp executes
+binx /opt/myapp/bin/myapp --install
+# Now run directly:
+myapp arg1 arg2
 ```
 
-Press Enter to use the suggested alias name (the basename), or type a custom name.
+### Criar entrada desktop
 
-### Configuration
+```bash
+binx /opt/myapp/bin/myapp --desktop
+```
 
-Aliases are stored in `~/.config/binx.json`:
+### Remover alias
+
+```bash
+binx myapp --remove
+```
+
+## Configuração
+
+Aliases são armazenados em `~/.config/binx.json`:
 
 ```json
 {
   "aliases": {
     "myapp": {
-      "path": "/home/user/projects/myapp/target/release/myapp"
+      "path": "/opt/myapp/bin/myapp",
+      "script": "/home/user/.binx/myapp",
+      "desktop": "/home/user/.local/share/applications/binx_myapp.desktop"
     }
   }
 }
 ```
 
-You can edit this file manually to add, remove, or modify aliases.
+Os campos `script` e `desktop` são adicionados ao usar `--install` e `--desktop`.
 
-## Development
+## Desenvolvimento
 
-### Building
-
-```bash
+```sh
+# Build debug
 cargo build
+
+# Build release
+cargo build --release
+
+# Run
+cargo run -- <target> [args...]
 ```
 
-### Running
+## Créditos ou referências
 
-```bash
-cargo run -- <executable> [args...]
-```
-
-### Testing
-
-```bash
-cargo test
-```
-
-## Requirements
-
-- Rust 2024 edition
-- Linux/Unix system (uses Unix-specific features)
-- `nix` crate with `process` feature
-- `serde_json` crate
-
-## License
-
-TODO: Add license information
-
-## Contributing
-
-TODO: Add contribution guidelines
+- [clap](https://github.com/clap-rs/clap) - Command line argument parser
+- [nix](https://github.com/nix-rust/nix) - Rust friendly bindings to *nix APIs
+- [serde_json](https://github.com/serde-rs/json) - JSON serialization
