@@ -24,15 +24,15 @@ struct Cli {
     target: String,
 
     /// Remove an alias, its script and .desktop file
-    #[arg(long = "remove")]
+    #[arg(short = 'r', long = "remove")]
     remove: bool,
 
     /// Install a script for the target in ~/.binx/
-    #[arg(long = "install")]
+    #[arg(short = 'i', long = "install")]
     install: bool,
 
     /// Install a .desktop file for the target
-    #[arg(long = "desktop")]
+    #[arg(short = 'd', long = "desktop")]
     desktop: bool,
 
     /// Print version information
