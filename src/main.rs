@@ -8,7 +8,11 @@ mod utils;
 pub use crate::internal::config;
 pub use crate::internal::flow;
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = if cfg!(debug_assertions) {
+    "0.1.0-debug"
+} else {
+    "0.1.0"
+};
 
 #[derive(Parser)]
 #[command(name = "binx")]
