@@ -47,7 +47,7 @@ struct Cli {
 #[allow(unreachable_code)]
 fn main() {
     // Run auto-installation check first
-    if let Err(e) = config::run_auto_installation() {
+    if let Err(e) = config::run_auto_installation(VERSION) {
         eprintln!("Auto-installation failed: {}", e);
         eprintln!("Continuing anyway...");
     }

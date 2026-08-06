@@ -62,6 +62,39 @@ pub mod config {
         }
     }
 
+    /// Gets the version of the installed executable by running it with --version
+    fn get_installed_version() -> Option<String> {
+        let install_path = get_install_executable_path().ok()?;
+        
+        use std::process::Command;
+        let output = Command::new(&install_path)
+            .arg("--version")
+            .output()
+            .ok()?;
+        
+        if output.status.success() {
+            let version_output = String::from_utf8_lossy(&output.stdout);
+            // Parse version from output like "binx v0.1.0"
+            version_output
+                .trim()
+                .strip_prefix("binx v")
+                .map(|v| v.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Checks if the installed version is outdated compared to the current version
+    pub fn is_version_outdated(current_version: &str) -> bool {
+        if let Some(installed_version) = get_installed_version() {
+            // TODO: Compare versions properly
+            installed_version != current_version
+        } else {
+            // If we can't get the version, assume it needs update
+            true
+        }
+    }
+
     /// Checks if the installation exists and is valid
     fn installation_exists() -> bool {
         match get_install_executable_path() {
@@ -131,15 +164,26 @@ pub mod config {
     }
 
     /// Runs the auto-installation check and performs installation if needed
-    pub fn run_auto_installation() -> Result<(), io::Error> {
-        // If running from installation, proceed normally
+    pub fn run_auto_installation(current_version: &str) -> Result<(), io::Error> {
+        // If running from installation, check if version is outdated
         if is_running_from_installation() {
+            if is_version_outdated(current_version) {
+                println!("Installed version is outdated, updating...");
+                perform_installation()?;
+                add_to_path()?;
+            }
             return Ok(());
         }
 
-        // If installation exists, respect it and proceed
+        // If installation exists, check if version is outdated
         if installation_exists() {
-            println!("{:?} ✔", get_install_dir()?);
+            if is_version_outdated(current_version) {
+                println!("Installed version is outdated, updating...");
+                perform_installation()?;
+                add_to_path()?;
+            } else {
+                println!("{:?} ✔", get_install_dir()?);
+            }
             return Ok(());
         }
 
