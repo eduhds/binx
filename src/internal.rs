@@ -74,7 +74,7 @@ pub mod config {
         
         if output.status.success() {
             let version_output = String::from_utf8_lossy(&output.stdout);
-            // Parse version from output like "binx v0.1.0"
+            // Parse version from output like "binx v0.1.0-1234567890" or "binx v1234567890"
             version_output
                 .trim()
                 .strip_prefix("binx v")
@@ -87,8 +87,24 @@ pub mod config {
     /// Checks if the installed version is outdated compared to the current version
     pub fn is_version_outdated(current_version: &str) -> bool {
         if let Some(installed_version) = get_installed_version() {
-            // TODO: Compare versions properly
-            installed_version != current_version
+            // Extract static version parts (before dash) for comparison
+            let current_static = current_version.split('-').next().unwrap_or(current_version);
+            let installed_static = installed_version.split('-').next().unwrap_or(&installed_version);
+            
+            // If current has static part but installed doesn't (or vice versa), it's outdated
+            let current_has_static = current_static != current_version;
+            let installed_has_static = installed_static != &installed_version;
+            
+            if current_has_static != installed_has_static {
+                // Different build types (debug vs release), need update
+                true
+            } else if current_has_static {
+                // Both have static parts, compare them
+                installed_static != current_static
+            } else {
+                // Both are timestamps only (debug mode), compare full versions
+                installed_version != current_version
+            }
         } else {
             // If we can't get the version, assume it needs update
             true
@@ -165,13 +181,8 @@ pub mod config {
 
     /// Runs the auto-installation check and performs installation if needed
     pub fn run_auto_installation(current_version: &str) -> Result<(), io::Error> {
-        // If running from installation, check if version is outdated
+        // If running from installation, do nothing
         if is_running_from_installation() {
-            if is_version_outdated(current_version) {
-                println!("Installed version is outdated, updating...");
-                perform_installation()?;
-                add_to_path()?;
-            }
             return Ok(());
         }
 

@@ -4,6 +4,7 @@ pub mod system {
     use std::fs;
     use std::io;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     /// Gets the home directory from environment variables
     pub fn get_home_dir() -> Result<String, io::Error> {
@@ -64,5 +65,12 @@ pub mod system {
         }
 
         Ok(apps_dir)
+    }
+
+    pub fn get_timestamp() -> u128 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Erro ao obter tempo")
+            .as_millis()
     }
 }

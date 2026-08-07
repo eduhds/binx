@@ -8,20 +8,26 @@ mod utils;
 pub use crate::internal::config;
 pub use crate::internal::flow;
 
-const VERSION: &str = if cfg!(debug_assertions) {
-    "0.1.0-debug"
-} else {
-    "0.1.0"
-};
+const VERSION_STATIC: &str = "0.1.0";
+
+fn get_version() -> String {
+    if cfg!(debug_assertions) {
+        let timestamp = utils::system::get_timestamp().to_string();
+        format!("{}-{}", VERSION_STATIC, timestamp)
+    } else {
+        VERSION_STATIC.to_string()
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "binx")]
 #[command(about = "Execute binaries with alias management", long_about = None)]
-#[command(version = VERSION)]
+#[command(version = VERSION_STATIC)]
 #[command(disable_version_flag = true)]
 struct Cli {
     /// Target file or alias to execute
-    target: String,
+    #[arg(required_unless_present = "version")]
+    target: Option<String>,
 
     /// Remove an alias, its script and .desktop file
     #[arg(short = 'r', long = "remove")]
@@ -36,8 +42,8 @@ struct Cli {
     desktop: bool,
 
     /// Print version information
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
-    version: (),
+    #[arg(short = 'v', long = "version")]
+    version: bool,
 
     /// Remaining arguments to pass to the target
     #[arg(trailing_var_arg = true)]
@@ -46,18 +52,23 @@ struct Cli {
 
 #[allow(unreachable_code)]
 fn main() {
+    let cli = Cli::parse();
+    let version = get_version();
+    
+    // Handle --version flag
+    if cli.version {
+        println!("binx v{}", version);
+        return;
+    }
+    
+    let target = cli.target.expect("Target should be present when version is false");
+    
     // Run auto-installation check first
-    if let Err(e) = config::run_auto_installation(VERSION) {
+    if let Err(e) = config::run_auto_installation(&version) {
         eprintln!("Auto-installation failed: {}", e);
         eprintln!("Continuing anyway...");
     }
-
-    let cli = Cli::parse();
-
-    let target = cli.target;
     let args = cli.args;
-    
-    println!("binx v{}", VERSION);
     
     let mut config = match config::get_config() {
         Ok(config) => config,
