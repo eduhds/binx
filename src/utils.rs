@@ -31,7 +31,7 @@ pub mod system {
     }
 
     /// Resolves a path to its absolute canonical form, expanding ~ to $HOME
-    pub fn resolve_path(target: &str) -> Result<PathBuf, io::Error> {
+    pub fn resolve_path(target: &String) -> Result<PathBuf, io::Error> {
         let expanded = if target == "~" {
             PathBuf::from(get_home_dir()?)
         } else if let Some(rest) = target.strip_prefix("~/") {

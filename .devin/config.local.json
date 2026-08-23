@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(~/.binx/binx)",
+      "Exec(timeout)",
+      "Exec(true)",
+      "Exec(./target/debug/binx)",
+      "Exec(cargo build)",
+      "Exec(./target/release/binx)"
+    ]
+  }
+}

@@ -1,6 +1,26 @@
+/// Application module
+pub mod app {
+    pub use crate::utils::system;
+
+    pub const NAME: &str = "binx";
+    pub const VERSION: &str = "0.1.0";
+    pub const DESCRIPTION: &str = "Execute binaries with alias management";
+
+    pub fn mode_version() -> String {
+        if cfg!(debug_assertions) {
+            let timestamp = system::get_timestamp().to_string();
+            format!("{}-{}", VERSION, timestamp)
+        } else {
+            VERSION.to_string()
+        }
+    }
+}
+
 /// Configuration management
 pub mod config {
+    use serde::{Deserialize, Serialize};
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::env;
     use std::error;
     use std::fs;
@@ -10,6 +30,19 @@ pub mod config {
     use std::process;
 
     pub use crate::utils::system;
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ConfigAlias {
+        pub path: String,
+        pub script: String,
+        pub desktop: String,
+        pub icon: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct Config {
+        pub aliases: HashMap<String, ConfigAlias>,
+    }
 
     const CONFIG_FILE: &str = ".config/binx.json";
     const DEFAULT_CONFIG: &str = r#"{
@@ -218,7 +251,7 @@ pub mod config {
 
     /// Installs a script for the target in ~/.binx/ with executable permissions
     /// and adds the script path to the config
-    pub fn install_target_script(alias: &str) -> Result<(), Box<dyn error::Error>> {
+    pub fn install_target_script(alias: &str, config: &mut Config) -> Result<(), Box<dyn error::Error>> {
         let install_dir = get_install_dir()?;
         let script_path = install_dir.join(alias);
 
@@ -234,16 +267,11 @@ pub mod config {
         fs::set_permissions(&script_path, perms)?;
 
         // Add script path to config
-        let mut config = get_config()?;
         let script_path_str = script_path.to_string_lossy().to_string();
 
-        if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
-            if let Some(alias) = aliases.get_mut(alias) {
-                // Update existing alias with script path
-                if let Some(alias_obj) = alias.as_object_mut() {
-                    alias_obj.insert("script".to_string(), serde_json::json!(script_path_str));
-                }
-            }
+        if let Some(alias) = config.aliases.get_mut(alias) {
+            // Update existing alias with script path
+            alias.script = script_path_str;
         }
 
         save_config(&config)?;
@@ -268,8 +296,6 @@ pub mod config {
 
         None
     }
-
-
 
     /// Resolves the Exec and TryExec paths for a desktop entry.
     pub fn resolve_desktop_exec(
@@ -365,6 +391,7 @@ Categories=Utility;\n",
     pub fn install_desktop_file(
         alias: &str,
         target_path: &PathBuf,
+        config: &mut Config,
     ) -> Result<(), Box<dyn error::Error>> {
         let apps_dir = system::get_user_applications_dir()?;
         let desktop_name = desktop_filename(alias);
@@ -402,13 +429,10 @@ Categories=Utility;\n",
             _ => {}
         }
 
-        let mut config = get_config()?;
         let desktop_file_path_str = desktop_file_path.to_string_lossy().to_string();
 
-        if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
-            if let Some(alias_obj) = aliases.get_mut(alias).and_then(|a| a.as_object_mut()) {
-                alias_obj.insert("desktop".to_string(), serde_json::json!(desktop_file_path_str));
-            }
+        if let Some(alias) = config.aliases.get_mut(alias) {
+            alias.desktop = desktop_file_path_str;
         }
 
         save_config(&config)?;
@@ -437,11 +461,8 @@ Categories=Utility;\n",
     }
 
     /// Removes an alias and all associated files (script, .desktop, icon)
-    pub fn remove_alias(alias: &str) -> Result<(), Box<dyn error::Error>> {
-        let mut config = get_config()?;
-        let aliases = config.get("aliases").and_then(|a| a.as_object());
-
-        let alias_data = match aliases.and_then(|a| a.get(alias)) {
+    pub fn remove_alias(alias: &str, config: &mut Config) -> Result<(), Box<dyn error::Error>> {
+        let alias_data = match &config.aliases.get(alias) {
             Some(data) => data.clone(),
             None => {
                 println!("Alias '{}' not found", alias);
@@ -450,8 +471,8 @@ Categories=Utility;\n",
         };
 
         // Remove script from ~/.binx/
-        if let Some(script_path) = alias_data.get("script").and_then(|s| s.as_str()) {
-            let p = PathBuf::from(script_path);
+        if !alias_data.script.is_empty() {
+            let p = PathBuf::from(&alias_data.script);
             if p.exists() {
                 fs::remove_file(&p)?;
                 println!("Removed script: {:?}", p);
@@ -481,13 +502,13 @@ Categories=Utility;\n",
         }
 
         // Remove icon if installed
-        if let Some(icon_name) = alias_data.get("icon").and_then(|s| s.as_str()) {
+        if !alias_data.icon.is_empty() {
             let home_dir = system::get_home_dir()?;
             let icons_base = PathBuf::from(&home_dir).join(".local/share/icons/hicolor");
 
             for dir in &["scalable/apps", "256x256/apps"] {
                 for ext in &["svg", "png"] {
-                    let icon_path = icons_base.join(dir).join(format!("{}.{}", icon_name, ext));
+                    let icon_path = icons_base.join(dir).join(format!("{}.{}", alias_data.icon, ext));
                     if icon_path.exists() {
                         fs::remove_file(&icon_path)?;
                         println!("Removed icon: {:?}", icon_path);
@@ -497,9 +518,8 @@ Categories=Utility;\n",
         }
 
         // Remove from config
-        if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
-            aliases.remove(alias);
-        }
+        config.aliases.remove(alias);
+        
 
         save_config(&config)?;
         println!("Removed alias '{}'", alias);
@@ -530,11 +550,35 @@ Categories=Utility;\n",
         Ok(config)
     }
 
-    pub fn save_config(config: &Value) -> Result<(), io::Error> {
+    pub fn save_config(config: &Config) -> Result<(), io::Error> {
         let config_path = get_config_file_path()?;
         let config_str = serde_json::to_string_pretty(config)?;
         fs::write(&config_path, config_str)?;
         Ok(())
+    }
+
+    pub fn load() -> Result<Config, io::Error> {
+        let config_path = get_config_file_path()?;
+
+        let content = match fs::read_to_string(&config_path) {
+            Ok(content) => {
+                if content.trim().is_empty() {
+                    fs::write(&config_path, DEFAULT_CONFIG)?;
+                    DEFAULT_CONFIG.to_string()
+                } else {
+                    content
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                fs::write(&config_path, DEFAULT_CONFIG)?;
+                DEFAULT_CONFIG.to_string()
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        let config: Config = serde_json::from_str(&content)?;
+    
+        Ok(config)
     }
 }
 

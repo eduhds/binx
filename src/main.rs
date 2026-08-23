@@ -5,28 +5,18 @@ use std::path::PathBuf;
 mod internal;
 mod utils;
 
+pub use crate::internal::app;
 pub use crate::internal::config;
 pub use crate::internal::flow;
 
-const VERSION_STATIC: &str = "0.1.0";
-
-fn get_version() -> String {
-    if cfg!(debug_assertions) {
-        let timestamp = utils::system::get_timestamp().to_string();
-        format!("{}-{}", VERSION_STATIC, timestamp)
-    } else {
-        VERSION_STATIC.to_string()
-    }
-}
-
 #[derive(Parser)]
-#[command(name = "binx")]
-#[command(about = "Execute binaries with alias management", long_about = None)]
-#[command(version = VERSION_STATIC)]
+#[command(name = app::NAME)]
+#[command(about = app::DESCRIPTION, long_about = None)]
+#[command(version = app::VERSION)]
 #[command(disable_version_flag = true)]
 struct Cli {
     /// Target file or alias to execute
-    #[arg(required_unless_present = "version")]
+    #[arg(required_unless_present = "version", required_unless_present = "list")]
     target: Option<String>,
 
     /// Remove an alias, its script and .desktop file
@@ -41,6 +31,10 @@ struct Cli {
     #[arg(short = 'd', long = "desktop")]
     desktop: bool,
 
+    /// List available aliases
+    #[arg(short = 'l', long = "list")]
+    list: bool,
+
     /// Print version information
     #[arg(short = 'v', long = "version")]
     version: bool,
@@ -53,76 +47,86 @@ struct Cli {
 #[allow(unreachable_code)]
 fn main() {
     let cli = Cli::parse();
-    let version = get_version();
+    let version = app::mode_version();
     
+    // Always print version first
+    println!("{} v{}", app::NAME, version);
+
     // Handle --version flag
     if cli.version {
-        println!("binx v{}", version);
         return;
     }
-    
-    let target = cli.target.expect("Target should be present when version is false");
-    
+
     // Run auto-installation check first
     if let Err(e) = config::run_auto_installation(&version) {
         eprintln!("Auto-installation failed: {}", e);
         eprintln!("Continuing anyway...");
     }
-    let args = cli.args;
-    
-    let mut config = match config::get_config() {
+
+    // Load configuration
+    let mut config = match config::load() {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Failed to read/create config file: {}", e);
             return;
         }
     };
-    
-    let mut target_name = String::new();
-    let mut target_path_str = String::new();
-    let mut target_path_buf = PathBuf::new();
+
+    // Available aliases from config
+    let available_aliases: String = config.aliases.keys().map(|k| k.clone()).collect::<Vec<String>>().join(", ");
+
+    if cli.list {
+        println!("Available aliases: {}", available_aliases);
+        return;
+    }
+
+    // A path or link to an executable to be aliased
+    // or alias of an already aliased executable
+    let target = cli.target.expect(
+        format!("Target is a required argument. Available aliases: {}", available_aliases).as_str()
+    );
+
+    // Arguments to pass to the target command
+    let target_args = cli.args;
+
+    let mut target_name: String;
+    let mut target_path_str = "".to_string();
+    let target_path_buf: PathBuf;
     let mut exists = false;
-
-    let aliases = config.get("aliases").and_then(|a| a.as_object());
-
+    
     // First, determine if target is an alias or a path
-    let is_alias = if let Some(aliases) = aliases {
-        aliases.get(&target).is_some()
-    } else {
-        false
-    };
-
-    if is_alias {
+    if config.aliases.contains_key(&target) {
         // Target is an alias
-        if let Some(aliases) = aliases {
-            if let Some(alias) = aliases.get(&target) {
-                target_name = target.clone();
+        target_name = target.clone();
+        let alias = config.aliases.get(&target).unwrap();
 
-                if let Some(alias_path) = alias.get("path").and_then(|p| p.as_str()) {
-                    match utils::system::resolve_path(alias_path) {
-                        Ok(resolved) => {
-                            exists = true;
-                            target_path_str = resolved.to_string_lossy().to_string();
-                            target_path_buf = resolved;
-                        }
-                        Err(e) => {
-                            eprintln!("Error: alias '{}' has invalid path: {}", target, e);
-                            return;
-                        }
-                    }
-                }
+        match utils::system::resolve_path(&alias.path) {
+            Ok(path) => {
+                exists = true;
+                target_path_str = path.to_string_lossy().to_string();
+                target_path_buf = path;
+            }
+            Err(e) => {
+                // Something is wrong with the alias configuration
+                eprintln!("Error: alias '{}' has invalid path: {}", target, e);
+                return;
             }
         }
+    } else if target.starts_with("http://") || target.starts_with("https://") {
+        // TODO: Handle HTTP URLs - maybe download and cache?
+        eprintln!("Error: HTTP URLs are not yet supported. Target: {}", target);
+        return;
     } else {
         // Target is a path (absolute, relative, or ~/...), resolve to absolute
         target_path_buf = match utils::system::resolve_path(&target) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: target '{}' is invalid: {}", target, e);
                 return;
             }
         };
 
+        // Check if the resolved path is a file (not a directory)
         if !target_path_buf.is_file() {
             eprintln!("Error: '{}' is not a file", target);
             return;
@@ -141,16 +145,13 @@ fn main() {
             .to_string();
 
         // Search ALL aliases by path value to detect existing registrations
-        if let Some(aliases) = aliases {
-            for (alias_key, alias_val) in aliases.iter() {
-                if let Some(alias_path) = alias_val.get("path").and_then(|p| p.as_str()) {
-                    if alias_path == target_path_str.as_str() {
-                        // Already registered under a (possibly different) alias
-                        target_name = alias_key.clone();
-                        exists = true;
-                        break;
-                    }
-                }
+        // and avoid duplications
+        for (alias_key, alias_val) in config.aliases.iter() {
+            if alias_val.path == target_path_str {
+                // Already registered under a (possibly different) alias
+                target_name = alias_key.clone();
+                exists = true;
+                break;
             }
         }
     }
@@ -158,7 +159,7 @@ fn main() {
     // Handle --remove flag
     if cli.remove {
         if exists {
-            if let Err(e) = config::remove_alias(&target_name) {
+            if let Err(e) = config::remove_alias(&target_name, &mut config) {
                 eprintln!("Failed to remove alias: {}", e);
             }
         } else {
@@ -167,7 +168,18 @@ fn main() {
         return;
     }
 
+    // Must be executable to be registered
+    let is_executable = std::fs::metadata(&target_path_str)
+        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false);
+
+    if !is_executable {
+        eprintln!("Error: '{}' is not executable", target_path_str.as_str());
+        return;
+    }
+
     if !exists {
+        // Register new alias
         use std::io::{self, Write};
 
         print!("Enter alias name [{}]: ", target_name);
@@ -183,22 +195,23 @@ fn main() {
             target_name = input;
         }
 
-        if let Some(aliases) = config.get_mut("aliases").and_then(|a| a.as_object_mut()) {
-            let alias_obj = serde_json::json!({
-                "path": target_path_str
-            });
+        let alias_obj = config::ConfigAlias { 
+            path: target_path_str.clone(),
+            script: String::new(),
+            desktop: String::new(),
+            icon: String::new()
+        };
 
-            aliases.insert(target_name.to_string(), alias_obj);
+        config.aliases.insert(target_name.clone(), alias_obj);
 
-            if let Err(e) = config::save_config(&config) {
-                eprintln!("Failed to save config file: {}", e);
-            }
+        if let Err(e) = config::save_config(&config) {
+            eprintln!("Failed to save config file: {}", e);
         }
     }
 
     // Handle --install flag
     if cli.install {
-        if let Err(e) = config::install_target_script(&target_name) {
+        if let Err(e) = config::install_target_script(&target_name, &mut config) {
             eprintln!("Failed to install script for '{}': {}", target_name, e);
             return;
         }
@@ -208,20 +221,12 @@ fn main() {
 
     // Handle --desktop flag
     if cli.desktop {
-        if let Err(e) = config::install_desktop_file(&target_name, &target_path_buf) {
+        if let Err(e) = config::install_desktop_file(&target_name, &target_path_buf, &mut config) {
             eprintln!("Failed to install .desktop file for '{}': {}", target_name, e);
             return;
         }
         println!("Successfully installed .desktop file for '{}'", target_name);
     }
 
-    let is_executable = std::fs::metadata(&target_path_str)
-        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false);
-
-    if is_executable {
-        flow::execute(target_path_str.as_str(), &args);
-    } else {
-        eprintln!("Error: '{}' is not executable", target_path_str.as_str());
-    }
+    flow::execute(target_path_str.as_str(), &target_args);
 }
