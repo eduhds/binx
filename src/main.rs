@@ -58,7 +58,7 @@ fn main() {
     }
 
     // Run auto-installation check first
-    if let Err(e) = config::run_auto_installation(&version) {
+    if let Err(e) = app::run_auto_installation(&version) {
         eprintln!("Auto-installation failed: {}", e);
         eprintln!("Continuing anyway...");
     }
@@ -73,24 +73,28 @@ fn main() {
     };
 
     // Available aliases from config
-    let available_aliases: String = config.aliases.keys().map(|k| k.clone()).collect::<Vec<String>>().join(", ");
+    let mut available_aliases = config.aliases.keys().map(|k| k.clone()).collect::<Vec<String>>();
+    available_aliases.sort();
+    let available_aliases: String = available_aliases.join(",\n\t");
+
+    let available_aliases_list = format!("Available aliases: \n\t{}", available_aliases);
 
     if cli.list {
-        println!("Available aliases: {}", available_aliases);
+        println!("{}", available_aliases_list);
         return;
     }
 
     // A path or link to an executable to be aliased
     // or alias of an already aliased executable
     let target = cli.target.expect(
-        format!("Target is a required argument. Available aliases: {}", available_aliases).as_str()
+        format!("Target is a required argument. {}", available_aliases_list).as_str()
     );
 
     // Arguments to pass to the target command
     let target_args = cli.args;
 
     let mut target_name: String;
-    let mut target_path_str = "".to_string();
+    let target_path_str: String;
     let target_path_buf: PathBuf;
     let mut exists = false;
     
@@ -159,8 +163,13 @@ fn main() {
     // Handle --remove flag
     if cli.remove {
         if exists {
-            if let Err(e) = config::remove_alias(&target_name, &mut config) {
-                eprintln!("Failed to remove alias: {}", e);
+            match app::remove_alias(&target_name, &mut config) {
+                Ok(_) => {
+                    config::save_config(&config).expect("Failed to save config");
+                },
+                Err(e) => {
+                    eprintln!("Failed to remove alias: {}", e);
+                }
             }
         } else {
             println!("'{}' is not a registered alias", target);
@@ -195,11 +204,11 @@ fn main() {
             target_name = input;
         }
 
-        let alias_obj = config::ConfigAlias { 
+        let alias_obj = config::ConfigAlias {
             path: target_path_str.clone(),
-            script: String::new(),
-            desktop: String::new(),
-            icon: String::new()
+            script: None,
+            desktop: None,
+            icon: None
         };
 
         config.aliases.insert(target_name.clone(), alias_obj);
@@ -211,21 +220,22 @@ fn main() {
 
     // Handle --install flag
     if cli.install {
-        if let Err(e) = config::install_target_script(&target_name, &mut config) {
+        if let Err(e) = app::install_target_script(&target_name, &mut config) {
             eprintln!("Failed to install script for '{}': {}", target_name, e);
             return;
         }
-        println!("Successfully installed script for '{}'", target_name);
-        println!("You can next time run: {} [args]", target_name);
     }
 
     // Handle --desktop flag
     if cli.desktop {
-        if let Err(e) = config::install_desktop_file(&target_name, &target_path_buf, &mut config) {
+        if let Err(e) = app::install_desktop_file(&target_name, &target_path_buf, &mut config) {
             eprintln!("Failed to install .desktop file for '{}': {}", target_name, e);
             return;
         }
-        println!("Successfully installed .desktop file for '{}'", target_name);
+    }
+    
+    if let Err(e) = config::save_config(&config) {
+        eprintln!("Failed to save config file: {}", e);
     }
 
     flow::execute(target_path_str.as_str(), &target_args);
