@@ -7,7 +7,6 @@ mod utils;
 
 pub use crate::internal::app;
 pub use crate::internal::config;
-pub use crate::internal::flow;
 
 #[derive(Parser)]
 #[command(name = app::NAME)]
@@ -238,5 +237,5 @@ fn main() {
         eprintln!("Failed to save config file: {}", e);
     }
 
-    flow::execute(target_path_str.as_str(), &target_args);
+    app::execute(target_path_str.as_str(), &target_args);
 }

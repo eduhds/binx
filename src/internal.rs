@@ -452,6 +452,30 @@ Categories=Utility;\n",
 
         Ok(())
     }
+
+     #[allow(unreachable_code)]
+    pub fn execute(bin_path: &str, bin_args: &[String]) {
+        use nix::unistd::execve;
+        use std::env;
+        use std::ffi::CString;
+
+        let path = CString::new(bin_path).expect("Failed to create CString");
+
+        let mut c_args: Vec<CString> = Vec::with_capacity(bin_args.len() + 1);
+        c_args.push(path.clone());
+        for arg in bin_args {
+            c_args.push(CString::new(arg.as_str()).expect("Failed to create CString"));
+        }
+
+        let c_args_refs: Vec<&CString> = c_args.iter().collect();
+
+        let c_env: Vec<CString> = env::vars()
+            .map(|(k, v)| CString::new(format!("{}={}", k, v)).expect("Failed to create CString"))
+            .collect();
+        let c_env_refs: Vec<&CString> = c_env.iter().collect();
+
+        execve::<&CString, &CString>(&path, &c_args_refs, &c_env_refs).expect("Failed to exec");
+    }
 }
 
 /// Configuration management
@@ -518,31 +542,8 @@ pub mod config {
     
         Ok(config)
     }
-}
 
-/// Flow management
-pub mod flow {
-    use nix::unistd::execve;
-    use std::env;
-    use std::ffi::CString;
-
-    #[allow(unreachable_code)]
-    pub fn execute(bin_path: &str, bin_args: &[String]) {
-        let path = CString::new(bin_path).expect("Failed to create CString");
-
-        let mut c_args: Vec<CString> = Vec::with_capacity(bin_args.len() + 1);
-        c_args.push(path.clone());
-        for arg in bin_args {
-            c_args.push(CString::new(arg.as_str()).expect("Failed to create CString"));
-        }
-
-        let c_args_refs: Vec<&CString> = c_args.iter().collect();
-
-        let c_env: Vec<CString> = env::vars()
-            .map(|(k, v)| CString::new(format!("{}={}", k, v)).expect("Failed to create CString"))
-            .collect();
-        let c_env_refs: Vec<&CString> = c_env.iter().collect();
-
-        execve::<&CString, &CString>(&path, &c_args_refs, &c_env_refs).expect("Failed to exec");
+    pub fn cleanup() {
+        // TODO: Implement cleanup logic to fix files to match the current config
     }
 }
