@@ -7,6 +7,7 @@ mod utils;
 
 pub use crate::internal::app;
 pub use crate::internal::config;
+pub use crate::utils::file;
 
 #[derive(Parser)]
 #[command(name = app::NAME)]
@@ -116,7 +117,15 @@ fn main() {
             }
         }
     } else if target.starts_with("http://") || target.starts_with("https://") {
-        // TODO: Handle HTTP URLs - maybe download and cache?
+        // Reject http
+        if target.starts_with("http://") {
+            eprintln!("Error: HTTPS is required for URLs. Target: {}", target);
+            return;
+        }
+
+        file::download_file(&target, "./file")
+            .expect("Failed to download file");
+
         eprintln!("Error: HTTP URLs are not yet supported. Target: {}", target);
         return;
     } else {

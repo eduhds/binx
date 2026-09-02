@@ -74,3 +74,15 @@ pub mod system {
             .as_millis()
     }
 }
+
+pub mod file {
+    pub fn download_file(url: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut response = reqwest::blocking::get(url)?;
+        
+        let mut file = std::fs::File::create(path)?;
+        response.copy_to(&mut file)?;
+        
+        Ok(())
+    }
+}
+
