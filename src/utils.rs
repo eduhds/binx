@@ -67,6 +67,10 @@ pub mod system {
         Ok(apps_dir)
     }
 
+    pub fn temp_dir() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
     pub fn get_timestamp() -> u128 {
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -76,11 +80,24 @@ pub mod system {
 }
 
 pub mod file {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::os::unix::fs::PermissionsExt;
+
     pub fn download_file(url: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut response = reqwest::blocking::get(url)?;
         
         let mut file = std::fs::File::create(path)?;
         response.copy_to(&mut file)?;
+        
+        Ok(())
+    }
+
+    /// Set executable permissions
+    pub fn set_executable_perms(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms)?;
         
         Ok(())
     }

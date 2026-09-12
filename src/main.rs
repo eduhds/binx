@@ -116,27 +116,29 @@ fn main() {
                 return;
             }
         }
-    } else if target.starts_with("http://") || target.starts_with("https://") {
-        // Reject http
-        if target.starts_with("http://") {
-            eprintln!("Error: HTTPS is required for URLs. Target: {}", target);
-            return;
-        }
-
-        file::download_file(&target, "./file")
-            .expect("Failed to download file");
-
-        eprintln!("Error: HTTP URLs are not yet supported. Target: {}", target);
-        return;
     } else {
-        // Target is a path (absolute, relative, or ~/...), resolve to absolute
-        target_path_buf = match utils::system::resolve_path(&target) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Error: target '{}' is invalid: {}", target, e);
-                return;
-            }
-        };
+        if target.starts_with("http://") || target.starts_with("https://") {
+            // Target is a URL 
+            let file_name = target.split("/").last().unwrap();
+            
+            let destination = format!("{}/{}", app::app_downloads_dir().unwrap().display(), file_name);
+            
+            println!("Downloading file: {}", file_name);
+            
+            file::download_file(&target, &destination)
+                .expect("Failed to download file");
+
+            target_path_buf = PathBuf::from(destination);
+        } else {
+            // Target is a path (absolute, relative, or ~/...), resolve to absolute
+            target_path_buf = match utils::system::resolve_path(&target) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: target '{}' is invalid: {}", target, e);
+                    return;
+                }
+            };
+        }        
 
         // Check if the resolved path is a file (not a directory)
         if !target_path_buf.is_file() {
@@ -192,7 +194,20 @@ fn main() {
 
     if !is_executable {
         eprintln!("Error: '{}' is not executable", target_path_str.as_str());
-        return;
+        
+        // Ask user if want set permissions
+        println!("Do you want to set executable permissions? (y/n)");
+        let mut input = String::new();
+        
+        std::io::stdin().read_line(&mut input).expect("Failed to read input");
+        let input = input.trim();
+        
+        if input == "y" || input == "Y" {
+            file::set_executable_perms(&target_path_buf)
+                .expect("Failed to set executable permissions");
+        } else {
+            return;
+        }
     }
 
     if !exists {

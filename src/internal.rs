@@ -42,6 +42,17 @@ pub mod app {
         Ok(install_dir.join(NAME))
     }
 
+    /// Gets app downloads path (~/.binx/downloads)
+    pub fn app_downloads_dir() -> Result<PathBuf, io::Error> {
+        let install_dir = app_home_dir()?;
+        let downloads_dir = install_dir.join("downloads");
+        // Create downloads directory if it doesn't exist
+        if !downloads_dir.exists() {
+            fs::create_dir_all(&downloads_dir)?;
+        }
+        Ok(downloads_dir)
+    }
+
     /// Returns the .desktop filename with "binx_" prefix for an alias
     pub fn desktop_filename(alias: &str) -> String {
         format!("binx_{}", alias)
